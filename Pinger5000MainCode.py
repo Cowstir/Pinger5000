@@ -14,6 +14,60 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 ping_tasks = {}  # key: user/role ID, value: task
 do_not_ping_list = set()  # user/role IDs
 
+# For status updater
+status_message = None
+status_channel = None
+status_update_task = None
+status_update_interval = 10  # seconds
+
+
+async def build_status_embed(ctx):
+    active_mentions = []
+    for id in ping_tasks:
+        obj = ctx.guild.get_member(id) or ctx.guild.get_role(id)
+        if obj:
+            active_mentions.append(obj.mention)
+        else:
+            active_mentions.append(f"<Unknown ID {id}>")
+
+    dnp_mentions = []
+    for id in do_not_ping_list:
+        obj = ctx.guild.get_member(id) or ctx.guild.get_role(id)
+        if obj:
+            dnp_mentions.append(obj.mention)
+        else:
+            dnp_mentions.append(f"<Unknown ID {id}>")
+
+    embed = discord.Embed(title="📊 Bot Status", color=discord.Color.blurple())
+    embed.add_field(
+        name="🔁 Currently Pinging",
+        value=", ".join(active_mentions) if active_mentions else "None",
+        inline=False
+    )
+    embed.add_field(
+        name="🚫 Do Not Ping List",
+        value=", ".join(dnp_mentions) if dnp_mentions else "None",
+        inline=False
+    )
+    return embed
+
+
+async def status_updater():
+    global status_message, status_channel, status_update_task
+    try:
+        while True:
+            if status_message is None or status_channel is None:
+                break
+            # Refresh message
+            status_message = await status_channel.fetch_message(status_message.id)
+            embed = await build_status_embed(status_message)
+            await status_message.edit(embed=embed)
+            await asyncio.sleep(status_update_interval)
+    except (discord.NotFound, discord.Forbidden):
+        status_message = None
+        status_channel = None
+        status_update_task = None
+
 
 @bot.command()
 async def pingstart(ctx, interval: float = 5.0, *targets: discord.Role | discord.Member):
@@ -138,39 +192,45 @@ async def CanPing(ctx, *targets: discord.Role | discord.Member):
 
 @bot.command()
 async def status(ctx):
-    """Show current pinging and Do Not Ping status."""
-    # Resolve IDs back to objects
-    active_mentions = []
-    for id in ping_tasks:
-        obj = ctx.guild.get_member(id) or ctx.guild.get_role(id)
+    """Show current pinging and Do Not Ping status, auto-updates every 10 seconds."""
+    global status_message, status_channel, status_update_task
+
+    embed = await build_status_embed(ctx)
+    if status_message and status_channel:
+        try:
+            status_message = await status_channel.fetch_message(status_message.id)
+            await status_message.edit(embed=embed)
+            await ctx.message.delete()
+        except discord.NotFound:
+            status_message = None
+            status_channel = None
+
+    if status_message is None or status_channel is None:
+        status_message = await ctx.send(embed=embed)
+        status_channel = ctx.channel
+
+    if status_update_task is None or status_update_task.done():
+        status_update_task = asyncio.create_task(status_updater())
+
+
+@bot.command()
+async def stopall(ctx):
+    """Stop all active pings immediately."""
+    if not ping_tasks:
+        await ctx.send("There are no active pings.")
+        return
+
+    stopped = []
+    for target_id, task in list(ping_tasks.items()):
+        task.cancel()
+        obj = ctx.guild.get_member(target_id) or ctx.guild.get_role(target_id)
         if obj:
-            active_mentions.append(obj.mention)
+            stopped.append(obj.mention)
         else:
-            active_mentions.append(f"<Unknown ID {id}>")
+            stopped.append(f"<Unknown ID {target_id}>")
+        ping_tasks.pop(target_id)
 
-    dnp_mentions = []
-    for id in do_not_ping_list:
-        obj = ctx.guild.get_member(id) or ctx.guild.get_role(id)
-        if obj:
-            dnp_mentions.append(obj.mention)
-        else:
-            dnp_mentions.append(f"<Unknown ID {id}>")
-
-    embed = discord.Embed(title="📊 Bot Status", color=discord.Color.blurple())
-
-    embed.add_field(
-        name="🔁 Currently Pinging",
-        value=", ".join(active_mentions) if active_mentions else "None",
-        inline=False
-    )
-
-    embed.add_field(
-        name="🚫 Do Not Ping List",
-        value=", ".join(dnp_mentions) if dnp_mentions else "None",
-        inline=False
-    )
-
-    await ctx.send(embed=embed)
+    await ctx.send(f"🛑 Stopped all pings: {', '.join(stopped)}")
 
 
 Webserver.keep_alive()
