@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import asyncio
 import os
 import Webserver
@@ -11,66 +11,167 @@ intents.members = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-ping_tasks = {}
-do_not_ping_list = set()  # Can include both user and role IDs
+ping_tasks = {}  # key: user/role ID, value: task
+do_not_ping_list = set()  # user/role IDs
 
 
 @bot.command()
-async def pingstart(ctx, target: discord.Role | discord.Member, interval: float = 5.0):
-    """Start pinging a user or role every `interval` seconds (supports decimals)."""
-
-    if target.id in do_not_ping_list:
-        await ctx.send(f"{target.mention} is on the Do Not Ping list.")
+async def pingstart(ctx, interval: float = 5.0, *targets: discord.Role | discord.Member):
+    """Start pinging one or more users/roles every `interval` seconds."""
+    if not targets:
+        await ctx.send("Please mention at least one user or role.")
         return
 
-    if target.id in ping_tasks:
-        await ctx.send(f"Already pinging {target.mention}!")
-        return
+    started = []
+    skipped = []
 
-    async def ping_loop():
-        try:
-            while True:
-                await ctx.send(f"{target.mention} 👋")
-                await asyncio.sleep(interval)
-        except asyncio.CancelledError:
-            pass
+    for target in targets:
+        if target.id in do_not_ping_list:
+            skipped.append(f"{target.mention} (Do Not Ping)")
+            continue
 
-    task = asyncio.create_task(ping_loop())
-    ping_tasks[target.id] = task
-    await ctx.send(f"Started pinging {target.mention} every {interval} seconds.")
+        if target.id in ping_tasks:
+            skipped.append(f"{target.mention} (Already pinging)")
+            continue
+
+        # Handle Role
+        if isinstance(target, discord.Role):
+            async def ping_role_loop(r=target):
+                try:
+                    while True:
+                        mentions = [
+                            m.mention for m in r.members
+                            if m.id not in do_not_ping_list and not m.bot
+                        ]
+                        if mentions:
+                            await ctx.send(" ".join(mentions) + " 👋")
+                        await asyncio.sleep(interval)
+                except asyncio.CancelledError:
+                    pass
+
+            task = asyncio.create_task(ping_role_loop())
+            ping_tasks[target.id] = task
+            started.append(target.mention)
+
+        # Handle Member
+        elif isinstance(target, discord.Member):
+            async def ping_user_loop(m=target):
+                try:
+                    while True:
+                        await ctx.send(f"{m.mention} 👋")
+                        await asyncio.sleep(interval)
+                except asyncio.CancelledError:
+                    pass
+
+            task = asyncio.create_task(ping_user_loop())
+            ping_tasks[target.id] = task
+            started.append(target.mention)
+
+    if started:
+        await ctx.send(f"Started pinging: {', '.join(started)} every {interval} seconds.")
+    if skipped:
+        await ctx.send(f"Skipped: {', '.join(skipped)}")
+
 
 @bot.command()
-async def pingstop(ctx, target: discord.Role | discord.Member):
-    """Stop pinging a user or role."""
-    task = ping_tasks.pop(target.id, None)
-    if task:
-        task.cancel()
-        await ctx.send(f"Stopped pinging {target.mention}.")
-    else:
-        await ctx.send(f"{target.mention} was not being pinged.")
-
-@bot.command()
-async def DoNotPing(ctx, target: discord.Role | discord.Member):
-    """Prevent the bot from pinging this user or role."""
-    if target.id in do_not_ping_list:
-        await ctx.send(f"{target.mention} is already on the Do Not Ping list.")
+async def pingstop(ctx, *targets: discord.Role | discord.Member):
+    """Stop pinging one or more users/roles."""
+    if not targets:
+        await ctx.send("Please mention at least one user or role.")
         return
 
-    
-    await pingstop(ctx, target)
+    stopped = []
+    not_found = []
 
-    do_not_ping_list.add(target.id)
-    await ctx.send(f"{target.mention} has been added to the Do Not Ping list.")
+    for target in targets:
+        task = ping_tasks.pop(target.id, None)
+        if task:
+            task.cancel()
+            stopped.append(target.mention)
+        else:
+            not_found.append(target.mention)
+
+    if stopped:
+        await ctx.send(f"Stopped pinging: {', '.join(stopped)}")
+    if not_found:
+        await ctx.send(f"Not being pinged: {', '.join(not_found)}")
+
 
 @bot.command()
-async def CanPing(ctx, target: discord.Role | discord.Member):
-    """Allow the bot to ping this user or role again."""
-    if target.id not in do_not_ping_list:
-        await ctx.send(f"{target.mention} is not on the Do Not Ping list.")
-        return
+async def DoNotPing(ctx, *targets: discord.Role | discord.Member):
+    """Add users/roles to the Do Not Ping list."""
+    added = []
+    already = []
 
-    do_not_ping_list.remove(target.id)
-    await ctx.send(f"{target.mention} has been removed from the Do Not Ping list.")
+    for target in targets:
+        if target.id in do_not_ping_list:
+            already.append(target.mention)
+        else:
+            await pingstop(ctx, target)
+            do_not_ping_list.add(target.id)
+            added.append(target.mention)
+
+    if added:
+        await ctx.send(f"Added to Do Not Ping list: {', '.join(added)}")
+    if already:
+        await ctx.send(f"Already on Do Not Ping list: {', '.join(already)}")
+
+
+@bot.command()
+async def CanPing(ctx, *targets: discord.Role | discord.Member):
+    """Remove users/roles from the Do Not Ping list."""
+    removed = []
+    not_on_list = []
+
+    for target in targets:
+        if target.id in do_not_ping_list:
+            do_not_ping_list.remove(target.id)
+            removed.append(target.mention)
+        else:
+            not_on_list.append(target.mention)
+
+    if removed:
+        await ctx.send(f"Removed from Do Not Ping list: {', '.join(removed)}")
+    if not_on_list:
+        await ctx.send(f"Not on Do Not Ping list: {', '.join(not_on_list)}")
+
+
+@bot.command()
+async def status(ctx):
+    """Show current pinging and Do Not Ping status."""
+    # Resolve IDs back to objects
+    active_mentions = []
+    for id in ping_tasks:
+        obj = ctx.guild.get_member(id) or ctx.guild.get_role(id)
+        if obj:
+            active_mentions.append(obj.mention)
+        else:
+            active_mentions.append(f"<Unknown ID {id}>")
+
+    dnp_mentions = []
+    for id in do_not_ping_list:
+        obj = ctx.guild.get_member(id) or ctx.guild.get_role(id)
+        if obj:
+            dnp_mentions.append(obj.mention)
+        else:
+            dnp_mentions.append(f"<Unknown ID {id}>")
+
+    embed = discord.Embed(title="📊 Bot Status", color=discord.Color.blurple())
+
+    embed.add_field(
+        name="🔁 Currently Pinging",
+        value=", ".join(active_mentions) if active_mentions else "None",
+        inline=False
+    )
+
+    embed.add_field(
+        name="🚫 Do Not Ping List",
+        value=", ".join(dnp_mentions) if dnp_mentions else "None",
+        inline=False
+    )
+
+    await ctx.send(embed=embed)
+
 
 Webserver.keep_alive()
 bot.run(TOKEN)
