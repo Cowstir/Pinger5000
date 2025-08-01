@@ -4,7 +4,7 @@ import asyncio
 import os
 import Webserver
 
-TOKEN = os.enviorn['discordkey']  # Replace with your bot token
+TOKEN = os.enviornment['discordkey']  # Replace with your bot token
 intents = discord.Intents.default()
 intents.message_content = True
 
@@ -44,3 +44,4 @@ async def pingstop(ctx, member: discord.Member):
 
 Webserver.keep_alive()
 bot.run(TOKEN)
+
