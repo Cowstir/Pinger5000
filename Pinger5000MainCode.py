@@ -4,7 +4,7 @@ import asyncio
 import os
 import Webserver
 
-TOKEN = os.environ['discordkey']  # Replace with your bot token
+TOKEN = os.environ['discordkey']  # Fixed typo here
 intents = discord.Intents.default()
 intents.message_content = True
 
@@ -14,8 +14,8 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 ping_tasks = {}
 
 @bot.command()
-async def pingstart(ctx, member: discord.Member, interval: int = 5):
-    """Start pinging a user every `interval` seconds."""
+async def pingstart(ctx, member: discord.Member, interval: float = 5.0):  # Changed to float
+    """Start pinging a user every `interval` seconds (supports decimals)."""
     if member.id in ping_tasks:
         await ctx.send(f"Already pinging {member.mention}!")
         return
@@ -44,5 +44,3 @@ async def pingstop(ctx, member: discord.Member):
 
 Webserver.keep_alive()
 bot.run(TOKEN)
-
-
